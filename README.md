@@ -1,6 +1,6 @@
-# SAP AI Data Service
+# SAP Credit Application Data Service
 
-Первый локальный прототип HTTP-сервиса. Он принимает JSON от SAP, передает его во временный mock-провайдер и возвращает результат. Подключение корпоративного AI API будет следующим шагом.
+Локальный HTTP-сервис принимает Excel-файл в Base64, отправляет содержимое в корпоративный AI-провайдер через LiteLLM и возвращает массив кредитных заявок в JSON для SAP.
 
 ## Что нужно установить
 
@@ -20,6 +20,14 @@ pytest
 uvicorn app.main:app --reload
 ```
 
+Перед запуском задайте параметры AI-провайдера в текущем окне PowerShell:
+
+```powershell
+$env:AI_API_URL = "https://litellm.mlops.itlabs.io"
+$env:AI_API_KEY = "<твой-ключ>"
+$env:AI_MODEL = "gpt-5.6-luna"
+```
+
 Откройте <http://127.0.0.1:8000/docs>. Это автоматически созданная страница для проверки API.
 
 Проверка health endpoint:
@@ -28,19 +36,9 @@ uvicorn app.main:app --reload
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-Проверка extraction endpoint:
+Проверка Excel endpoint через Swagger:
 
-```powershell
-$body = @{
-    instruction = "Extract the delivery status"
-    data = @{
-        delivery_id = "4711"
-        status = "SHIPPED"
-    }
-} | ConvertTo-Json -Depth 5
-
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/v1/extract -ContentType "application/json" -Body $body
-```
+Откройте <http://127.0.0.1:8000/docs>, выберите `POST /v1/excel/parse`, нажмите `Try it out` и передайте JSON с Base64-файлом.
 
 ## Запуск в Docker
 
@@ -63,9 +61,43 @@ git push -u origin main
 
 В реальном корпоративном репозитории обычно нужно создать проект, настроить права, CI/CD и секреты. Секреты AI-провайдера нельзя помещать в Git или Dockerfile: их передают через Secret/Environment Variable на платформе развертывания.
 
-## Текущие ограничения
+## API
 
-- Ответ пока не генерирует настоящая AI-модель: используется `provider=mock`.
-- Supabase endpoint требует переменные окружения `SUPABASE_URL` и `SUPABASE_KEY`.
-- Аутентификация, лимиты запросов, журналирование и подключение к корпоративному AI API еще не добавлены.
-- В Kubernetes этот контейнер можно будет развернуть после получения требований компании к namespace, ingress, ресурсам, secrets и health probes.
+`POST /v1/excel/parse` принимает JSON:
+
+```json
+{
+    "file_name": "credit-application.xlsx",
+    "file_base64": "UEsDB..."
+}
+```
+
+Поддерживаются файлы `.xlsx` и `.xlsm`. Максимальный размер исходного Excel-файла после декодирования Base64: **10 MB**.
+
+Ответ:
+
+```json
+{
+    "applications": [
+        {
+            "name": "ООО ГМ Групп",
+            "inn": 9722045906,
+            "client_id": 4711,
+            "requested_limit": 500000,
+            "approved_limit": 400000,
+            "start_date": "08.09.2026",
+            "end_date": "13.10.2026",
+            "bukrs": 1033
+        }
+    ]
+}
+```
+
+Правила обработки:
+
+- `inn`, `client_id` и `approved_limit` должны быть непустыми и отличаться от нуля;
+- заявки, не соответствующие этим правилам, не возвращаются;
+- `requested_limit`, `start_date`, `end_date` и `bukrs` могут быть `null`;
+- названия и порядок столбцов Excel могут отличаться.
+
+Ключ AI-провайдера нельзя помещать в Git, Dockerfile или исходный код. Передавай его через environment variable или корпоративный Secret Manager.
